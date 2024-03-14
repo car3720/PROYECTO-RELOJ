@@ -1,0 +1,431 @@
+//***************************************************************************
+// Universidad del Valle de Guatemala
+// IE2023: Programación de Microcontroladores
+// Autor: DIEGO CARDONA
+// Proyecto: PROYECTO RELOJ
+// Hardware: ATMEGA328P
+// Created: 17/02/2024
+//***************************************************************************
+//**************************************************************************
+
+.include "M328PDEF.inc"
+.cseg
+.def cont1s = R20	
+	; puede ser variable
+	; puede ser variable
+.def cont_disp1 = R22
+.def cont_disp2 = R23
+.def cont_disp3 = R25
+.def cont_disp4 = R16
+.def cont_disp5 = R28
+.def cont_disp6 = R27
+.def variable_push_button = R14 
+.def led_encendido_verde = R13  
+.def estado = R16
+.def lectura_registro = R17          ; Define un registro temporal
+
+; Constantes de configuración
+.equ debounce_delay = 100  ; Ajusta el valor según sea necesario (en milisegundos)
+
+.org 0x00
+	jmp SETUP		; vector reset
+
+.org 0x0020			; vector 
+	jmp ISR_TIMER0_OVF
+//***************************************************************************
+// CONFIGURACION
+//***************************************************************************
+
+T7S: .DB 0x3F, 0x06, 0x5B, 0x4F, 0X66, 0X6D, 0X7D, 0X07, 0X7F, 0X6F
+
+SETUP:
+//
+//***************************************************************************
+// Stack
+	LDI R16, LOW(RAMEND)
+	OUT SPL, R16
+	LDI R17, HIGH(RAMEND)
+	OUT SPH, R17
+//**************************************************	
+	LDI R16, 0b0011_1110	;	PB
+	OUT	DDRB, R16			;	set PB as OUTPUT
+	ldi R16, 0b1111_1111	;	PC
+	out DDRC, R16
+	ldi R16, 0b0011_1111
+	out DDRD, R16
+	
+	;limpiar Puertos de Salida
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTD, PD4
+	cbi PORTB, PB4
+
+	;limpiar Puertos de Entrada
+	cbi PORTD, PD5
+	cbi PORTD, PD6
+	cbi PORTD, PD7
+
+	;Configuración de pull ups en entradas de PD5 a PD7
+	ldi R16, 0b1110_0000
+	out PORTD, R16
+
+	;DESACTIVACIÓN EN TX Y RX
+	;LDI R16, 0x00
+	;STS UCSR0B, R16 ; deshablitamos el serial en pd0 y pd1
+
+	
+	ldi R28, 0					; T7S
+	ldi R21, 0		
+	ldi R26, 0					; T7S
+	ldi R24, 0
+	ldi R17, 0
+	clr R13
+	clr R14
+	clr R15
+	ldi R30, 0				
+	
+	ldi cont_disp1, 0			; valor inicial
+	ldi cont_disp2, 0
+	ldi cont_disp3, 0			; valor inicial
+	ldi cont_disp4, 0
+	ldi cont_disp5, 0
+	ldi cont_disp6, 0
+	ldi ZH, HIGH(T7S << 1)
+	ldi ZL, LOW(T7S << 1)
+	add ZL, R18
+	lpm R18, Z
+
+	
+
+	call Init_T0		; inicializar Timer0
+	sei					; habilitar interrupciones globales
+	ldi cont1s, 0
+	CLR cont_disp4
+	CLR cont_disp3
+
+//***************************************************************************
+LOOP:
+	call DISPLAY_SEG		; multiplexacion
+	call DISPLAY_SEG_DECENAS
+	call DISPLAY_MIN_UNIDADES
+	call DISPLAY_MIN_DECENAS
+	call DISPLAY_HORA_UNIDADES
+	call DISPLAY_HORA_DECENAS
+	
+
+
+	cpi cont1s, 100			; cada segundo
+	brne LOOP
+	clr cont1s
+
+
+	
+
+	LDI R19, 9 ; establece límite de unidades de segundos
+	cpse cont_disp1, R19 ; compara con el límite para saber si volverlo 0, de lo contrario aumentara hasta llegar al valor límite
+	rjmp AUMENTAR			; aumenta unidades de segundos
+	ldi cont_disp1, 0
+	LDI R19, 5  ; establece límite de decenas de segundos
+	cpse cont_disp2, R19 ; compara con el límite para saber si volverlo 0, de lo contrario aumentara hasta llegar al valor límite
+	rjmp AUMENTAR2			; aumenta decenas de segundos
+	ldi cont_disp2, 0
+
+
+	LDI R19, 9	; establece límite de unidades de minutos
+	cpse cont_disp3, R19 ; compara con el límite para saber si volverlo 0, de lo contrario aumentara hasta llegar al valor límite
+	rjmp AUMENTAR3			; aumenta unidades de minutos
+	ldi cont_disp3, 0
+
+	LDI R19, 5 ; establece límite de decenas de minutos	
+	cpse cont_disp4, R19 ; compara con el límite para saber si volverlo 0, de lo contrario aumentara hasta llegar al valor límite
+	rjmp AUMENTAR4			; aumenta decenas de minutos
+	ldi cont_disp4, 0
+	;rjmp LOOP
+
+	LDI R19, 9	; establece límite de unidades de horas
+	cpse cont_disp5, R19 ; compara con el límite para saber si volverlo 0, de lo contrario aumentara hasta llegar al valor límite
+	rjmp AUMENTAR5			; aumenta unidades de horas
+	ldi cont_disp5, 0
+	;rjmp LOOP
+
+	LDI R19, 2	; establece límite de decenas de horas	
+	cpse cont_disp6, R19 ; compara con el límite para saber si volverlo 0, de lo contrario aumentara hasta llegar al valor límite
+	rjmp AUMENTAR6			; aumenta decenas de horas
+	ldi cont_disp6, 0
+	rjmp LOOP
+//***************************************************************************
+// TIMER0
+//***************************************************************************
+Init_T0:
+	ldi R16, (1 << CS00)|(1 << CS02)	;config prescaler 1024
+	out TCCR0B, R16
+	ldi R16, 99							;valor desbordamiento
+	out TCNT0, R16						; valor inicial contador
+	ldi R16, (1 << TOIE0)
+	sts TIMSK0, R16
+	ret
+//***************************************************************************
+// ISR Timer 0 Overflow
+//***************************************************************************
+ISR_TIMER0_OVF:
+	push R16				; guardar en pila R16
+	in R16, sreg
+	push R16				; guardar en pila SREG
+
+	ldi R16, 99				; cargar el valor de desbordamiento
+	out TCNT0, R16			; cargar valor inicial
+	sbi TIFR0, TOV0			; borrar bandra TOV0
+	inc cont1s					; incrementar contador 10 ms
+
+
+	pop R16					; obtener SREG
+	out sreg, R16			; restaurar valor antiguo SREG
+	pop R16					; obtener valor R16
+	reti
+//*************************************************************************
+AUMENTAR:
+	inc cont_disp1 ;incrementa el contador de unidades de segundos
+	rjmp LOOP
+AUMENTAR2:
+	inc cont_disp2 ;incrementa el contador de decenas de segundos
+	rjmp LOOP
+AUMENTAR3:
+	inc cont_disp3 ;incrementa el contador de unidades de minutos
+	rjmp LOOP
+AUMENTAR4:
+	inc cont_disp4 ;incrementa el contador de decena de minutos
+	rjmp LOOP
+AUMENTAR5:
+	inc cont_disp5 ;incrementa el contador de unidades de horas
+	LDI R19, 4 ; cargar un valor de 4 a R19
+	cpse cont_disp5, R19 ; compara si cont_disp_5 es igual a 4
+	rjmp LOOP			; si no lo es regresa a LOOP
+	LDI R19, 2			; Si cumple la condición anterior entonces, carga a R19 un valor igual a 2
+	cpse cont_disp6, R19 ; Y compara nuevamente si cont_disp_6 es igual a 2
+	rjmp LOOP;			; si no lo es regresa a LOOP
+	LDI cont_disp5, 0	; Si cumple la función anterior carga a cont_disp5 un valor de 0 
+	LDI cont_disp6, 0	; Si cumple la función anterior carga a cont_disp6 un valor de 0 
+	rjmp LOOP			; Regresa al LOOP
+
+AUMENTAR6:
+	inc cont_disp6
+	rjmp LOOP
+
+//*************************************************************************
+DISPLAY_SEG:
+   ;Aquí se pone en 0 los demás displays
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTD, PD4
+  ;Llama a la lista
+	mov R18, cont_disp1		
+  ;carga de banderas
+	ldi ZH, HIGH(T7S << 1)
+	ldi ZL, LOW(T7S << 1)
+	add ZL, R18
+	lpm R18, Z					; almacenar el valor de la lista
+
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTD, PD4
+	cbi PORTB, PB4
+
+	sbrc R18, PC6
+	sbi PORTD, PD7
+	sbrs R18, PC6
+	cbi PORTD, PD5
+	out PORTC, R18				; mostrar en el display
+	cbi PORTD, PD5
+	cbi PORTB, PB2
+	cbi PORTB, PB1
+	;sbi PORTD, PD2
+
+	ret
+//*************************************************************************
+DISPLAY_SEG_DECENAS:
+   ;Aquí se pone en 0 los demás displays
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTB, PB4
+  ;Llama a la lista
+	mov R17, cont_disp2		
+  ;carga de banderas
+	ldi ZH, HIGH(T7S << 1)
+	ldi ZL, LOW(T7S << 1)
+	add ZL, R17
+	lpm R17, Z
+
+	cbi PORTD, PD2
+
+	sbrc R17, PC6
+	sbi PORTD, PD5
+	sbrs R17, PC6
+	cbi PORTD, PD5
+	out PORTC, R17				; mostrar en el display	
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTB, PB4
+	;sbi  PORTB, PB4
+
+	ret 
+
+//*************************************************************************
+DISPLAY_MIN_UNIDADES: ;PB3 DISPLAY ; R26 
+   ;Aquí se pone en 0 los demás displays
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTD, PD4
+;Llama a la lista
+	mov R26, cont_disp3		
+  ;carga de banderas
+	ldi ZH, HIGH(T7S << 1)
+	ldi ZL, LOW(T7S << 1)
+	add ZL, R26
+	lpm R26, Z
+
+	cbi PORTD, PD4
+	cbi PORTB, PB2
+	cbi PORTD, PD5
+
+	sbrc R26, PC6
+	sbi PORTD, PD5
+	sbrs R26, PC6
+	cbi PORTD, PD5
+
+	out PORTC, R26				; mostrar en el display	
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTD, PD4
+	sbi PORTB, PB4
+
+	ret
+
+	
+//*************************************************************************
+DISPLAY_MIN_DECENAS: ;PB3 DISPLAY ; R26 
+	 ;Aquí se pone en 0 los demás displays
+  cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTB, PB4
+  ;Llama a la lista
+	mov R24, cont_disp4			; para llamar la lista
+  ;carga de banderas
+	ldi ZH, HIGH(T7S << 1)
+	ldi ZL, LOW(T7S << 1)
+	add ZL, R24
+	lpm R24, Z
+
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTB, PB4
+	sbrc R24, PC6
+	sbi PORTD, PD5
+	sbrs R24, PC6
+	cbi PORTD, PD5
+	out PORTC, R24				; mostrar en el display	
+	cbi PORTD, PD2
+	cbi PORTD, PD3
+	cbi PORTB, PB4
+	sbi PORTD, PD4
+
+
+
+	ret
+
+
+//*************************************************************************
+DISPLAY_HORA_UNIDADES: ;PB3 DISPLAY ; R26 
+	 ;Aquí se pone en 0 los demás displays
+  cbi PORTD, PD2
+	cbi PORTD, PD4
+	cbi PORTB, PB4
+	; Llama a la lista
+	mov R21, cont_disp5		
+  ;carga de banderas
+	ldi ZH, HIGH(T7S << 1)
+	ldi ZL, LOW(T7S << 1)
+	add ZL, R21
+	lpm R21, Z
+
+  ;Nuevamente se pone en 0 los demás displays
+	cbi PORTD, PD2
+	cbi PORTD, PD4
+	cbi PORTB, PB4
+	sbrc R21, PC6
+	sbi PORTD, PD5
+	sbrs R21, PC6
+	cbi PORTD, PD5
+;Mostrar registro en display
+	out PORTC, R21				
+	cbi PORTD, PD2
+	cbi PORTD, PD4
+	cbi PORTB, PB4
+ ;Encender display 
+	sbi PORTD, PD3
+
+
+	ret
+
+
+//*************************************************************************
+DISPLAY_HORA_DECENAS: ;PB3 DISPLAY ; R26 
+  ;Aquí se pone en 0 los demás displays
+	cbi PORTD, PD4
+	cbi PORTB, PB4
+	cbi PORTD, PD3
+  ;Llama a la lista
+	mov R15, cont_disp6			
+  ;carga de banderas
+	ldi ZH, HIGH(T7S << 1)
+	ldi ZL, LOW(T7S << 1)
+	add ZL, R15
+	lpm R15, Z
+
+  ;Nuevamente se pone en 0 los demás displays
+	cbi PORTD, PD4
+	cbi PORTB, PB4
+	cbi PORTD, PD3
+	sbrc R15, PC6
+	sbi PORTD, PD5
+	sbrs R15, PC6
+	cbi PORTD, PD5
+  ;Mostrar registro en display
+	out PORTC, R15				
+	cbi PORTD, PD4
+	cbi PORTB, PB4
+	cbi PORTD, PD3
+  ;Encender display 
+	sbi PORTD, PD2
+
+
+
+
+	ret
+
+
+//*************************************************************************
+/*
+;Lectura de Push Buttons
+PUSH_BUTTON_1:
+	in lectura_registro, PD5
+	ldi estado, 0b0000_0001
+	cp lectura_registro, estado
+	breq espera_flanco_de_bajada
+	rjmp LOOP
+
+;Detecta hasta que lo presiona
+espera_flanco_de_bajada:
+	in lectura_registro, PD5
+	ldi estado, 0b0000_0001
+	cp lectura_registro, estado
+	breq espera_flanco_de_bajada
+	rjmp detecto_flanco
+
+;Detecta hasta que lo deja de presionar
+DETECTO_FLANCO:
+	inc led_encendido_verde
+	ldi variable_push_button, 0b0000_0001
+	cp led_encendido_verde, estado
+	rjmp espera_flanco_de_bajada
+	LDI PORTD, led_encendido_verde
+	rjmp LOOP*/
